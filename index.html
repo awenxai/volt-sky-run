@@ -201,11 +201,12 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
     <div class="deck">
       <div class="keys" id="keys"></div>
       <div class="tiltbox" id="tiltbox" hidden>
+        <button class="chip" id="ds-btn" aria-pressed="false" hidden><span data-i18n="dsMotion"></span><b id="ds-state"></b></button>
         <button class="chip" id="tilt-toggle" aria-pressed="false"><span data-i18n="tilt"></span><b id="tilt-state"></b></button>
         <button class="chip" id="tilt-cal" data-i18n="recenter"></button>
-        <label class="chip" for="tilt-sens"><span data-i18n="sens"></span><input type="range" id="tilt-sens" min="0.5" max="2" step="0.1" value="1"></label>
-        <label class="chip" for="tilt-inv"><input type="checkbox" id="tilt-inv"><span data-i18n="invert"></span></label>
-        <div class="tilthint" data-i18n="tiltHint"></div>
+        <label class="chip" id="tilt-sens-chip" for="tilt-sens"><span data-i18n="sens"></span><input type="range" id="tilt-sens" min="0.5" max="2" step="0.1" value="1"></label>
+        <label class="chip" id="tilt-inv-chip" for="tilt-inv"><input type="checkbox" id="tilt-inv"><span data-i18n="invert"></span></label>
+        <div class="tilthint" id="tilt-hint"></div>
       </div>
       <div class="pad" id="pad"></div>
     </div>
@@ -247,6 +248,14 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
       keys_medium: '<div><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> or <kbd>WASD</kbd></div><div>One direction at a time; the last key pressed wins. <kbd>M</kbd> mutes.</div>',
       keys_hard: '<div>Combine arrows for diagonals, or <kbd>Q</kbd> <kbd>E</kbd> <kbd>Z</kbd> <kbd>C</kbd></div><div>Momentum, gravity, crossing drones. Ground contact crashes. <kbd>M</kbd> mutes.</div>',
       signs: [['SKY', 'LANE 4'], ['CHARGE', '2 KM'], ['VOLT', 'AIR'], ['NO', 'HOVER'], ['METRO', 'SKY'], ['EXIT', '12B']],
+      keysPad: '<div>Gamepad: stick or D-pad to fly, <kbd>✕</kbd> launch, <kbd>△</kbd> recenter motion.</div>',
+      padOn: 'Controller connected: stick or D-pad to fly, ✕ to launch.',
+      dsMotion: 'PS5 motion', dsConnect: 'Connect', dsOn: 'Connected',
+      dsReady: 'PS5 motion connected. Tilt the controller to fly; △ recenters.',
+      dsFail: 'Could not open the controller. Close other apps using it and try again.',
+      dsLost: 'PS5 motion disconnected.',
+      textPad: 'PS5 motion is on: hold the controller comfortably, then press ✕. That angle becomes center.',
+      dsHint: 'Tilt the controller back to climb, forward to dive; roll it sideways to steer. △ recenters.',
     },
     zh: {
       tag: '电动飞行汽车模拟', easy: '简单', medium: '中等', hard: '困难', way2: '2 向', way4: '4 向', way8: '8 向',
@@ -272,6 +281,14 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
       keys_medium: '<div><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 或 <kbd>WASD</kbd></div><div>一次一个方向，以最后按下的键为准。<kbd>M</kbd> 静音。</div>',
       keys_hard: '<div>同时按两个方向键走斜线，或用 <kbd>Q</kbd> <kbd>E</kbd> <kbd>Z</kbd> <kbd>C</kbd></div><div>有惯性和重力，无人机会横穿，碰到地面就坠毁。<kbd>M</kbd> 静音。</div>',
       signs: [['空中', '4 号线'], ['充电站', '2 公里'], ['VOLT', 'AIR'], ['禁止', '悬停'], ['城市', '天际线'], ['出口', '12B']],
+      keysPad: '<div>手柄：摇杆或十字键飞行，<kbd>✕</kbd> 起飞，<kbd>△</kbd> 体感校准。</div>',
+      padOn: '手柄已连接：摇杆或十字键操控，✕ 键起飞。',
+      dsMotion: 'PS5 体感', dsConnect: '连接', dsOn: '已连接',
+      dsReady: 'PS5 体感已连接：倾斜手柄飞行，△ 键校准。',
+      dsFail: '没能连接手柄，关掉其他占用手柄的程序再试。',
+      dsLost: 'PS5 体感已断开。',
+      textPad: 'PS5 体感已开启：用舒服的姿势拿好手柄，再按 ✕ 起飞，那个角度就是中心。',
+      dsHint: '手柄后仰 = 爬升，前倾 = 下降；左右倾斜 = 转向。△ 键校准。',
     },
   };
   let lang = store.get('volt.lang', (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en');
@@ -446,15 +463,14 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   // ---------- tilt (gyroscope) input ----------
   const tiltSupported = 'DeviceOrientationEvent' in window && matchMedia('(pointer: coarse)').matches;
   const tilt = {
-    on: tiltSupported && store.get('volt.tilt', '1') === '1',
+    on: store.get('volt.tilt', '1') === '1',      // motion control wanted (phone or PS5 controller)
     listening: false, granted: false, gotEvent: false, needCalib: true,
     p0: 0, r0: 0, rawX: 0, rawY: 0, x: 0, y: 0,
     sens: parseFloat(store.get('volt.tiltSens', '1')) || 1,
     invert: store.get('volt.tiltInv', '0') === '1',
   };
   function onOrient(e) {
-    if (e.beta == null || e.gamma == null) return;
-    tilt.gotEvent = true;
+    if (e.beta == null || e.gamma == null || ds.device) return;
     const raw = screen.orientation && typeof screen.orientation.angle === 'number' ? screen.orientation.angle : (window.orientation || 0);
     const a = ((raw % 360) + 360) % 360;
     // convert device angles into the screen's own pitch (top edge) and roll (sideways)
@@ -463,6 +479,11 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
     else if (a === 270) { pitch = e.gamma; roll = -e.beta; }
     else if (a === 180) { pitch = -e.beta; roll = -e.gamma; }
     else { pitch = e.beta; roll = e.gamma; }
+    applyTilt(pitch, roll);
+  }
+  // pitch: + means climb; roll: + means steer right (degrees)
+  function applyTilt(pitch, roll) {
+    tilt.gotEvent = true;
     if (tilt.needCalib) { tilt.p0 = pitch; tilt.r0 = roll; tilt.needCalib = false; }
     const DZ = 4, R = 26 / tilt.sens;
     const shape = d => Math.sign(d) * Math.max(0, Math.min(1, (Math.abs(d) - DZ) / (R - DZ)));
@@ -479,7 +500,7 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   }
   // Must run inside a tap or key press: iPhone asks for permission here.
   function enableTilt() {
-    if (!tilt.on) return;
+    if (!tilt.on || !tiltSupported || ds.device) return;
     if (!window.isSecureContext) { setTiltOn(false); toast(t('needHttps')); return; }
     const DOE = window.DeviceOrientationEvent;
     if (DOE && typeof DOE.requestPermission === 'function' && !tilt.granted) {
@@ -493,8 +514,8 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
     tilt.rawX = tilt.rawY = tilt.x = tilt.y = 0;
     renderTiltUI();
   }
-  function tiltInput() {
-    const tx = tilt.x, ty = tilt.y;
+  // turn an analog (x, y) into the current mode's allowed directions
+  function analogInput(tx, ty) {
     if (mode === 'easy') return { dx: 0, up: ty };
     if (mode === 'medium') return Math.abs(tx) > Math.abs(ty) ? { dx: tx, up: 0 } : { dx: 0, up: ty };
     const mag = Math.min(1, Math.hypot(tx, ty));
@@ -505,8 +526,79 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   function readInput() {
     const k = readKeys();
     if (k.dx || k.up) return k;
-    if (tilt.on && tilt.gotEvent) return tiltInput();
+    if (gp.x || gp.y) return analogInput(gp.x, gp.y);
+    if (tilt.on && tilt.gotEvent) return analogInput(tilt.x, tilt.y);
     return k;
+  }
+
+  // ---------- gamepad (any controller: stick, D-pad, buttons) ----------
+  const gp = { x: 0, y: 0, prev: [] };
+  const firstPad = () => { for (const p of (navigator.getGamepads ? navigator.getGamepads() : [])) if (p && p.connected) return p; return null; };
+  addEventListener('gamepadconnected', () => toast(t('padOn')));
+  function pollPad() {
+    const p = firstPad();
+    gp.x = gp.y = 0;
+    if (!p) { for (const i of [12, 13, 14, 15]) release('g' + i); gp.prev = []; return; }
+    const b = i => !!(p.buttons[i] && p.buttons[i].pressed);
+    const edge = i => b(i) && !gp.prev[i];
+    const DPAD = { 12: ['up'], 13: ['down'], 14: ['left'], 15: ['right'] };
+    let dpad = false;
+    for (const i in DPAD) { if (b(i)) { press('g' + i, DPAD[i]); dpad = true; } else release('g' + i); }
+    let x = p.axes[0] || 0, y = -(p.axes[1] || 0);
+    const m = Math.hypot(x, y), DZ = 0.22;
+    if (m < DZ) x = y = 0; else { const s = Math.min(1, (m - DZ) / 0.7) / m; x *= s; y *= s; }
+    gp.x = x; gp.y = y;
+    if ((edge(0) || edge(9)) && state !== 'playing') start();        // ✕ or Options
+    if (edge(3)) { tilt.needCalib = true; toast(t('recentered')); }  // △
+    if (state === 'ready' && (dpad || Math.hypot(x, y) > 0.5)) start();
+    gp.prev = p.buttons.map(q => q.pressed);
+  }
+  function rumble(ms, strong, weak) {
+    try { const a = firstPad()?.vibrationActuator; a?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: strong, weakMagnitude: weak })?.catch?.(() => {}); } catch {}
+  }
+
+  // ---------- PS5 DualSense motion sensor (WebHID, Chrome/Edge) ----------
+  const hidOK = 'hid' in navigator && window.isSecureContext;
+  const DS_IDS = [{ vendorId: 0x054c, productId: 0x0ce6 }, { vendorId: 0x054c, productId: 0x0df2 }];
+  const isDS = d => DS_IDS.some(f => f.vendorId === d.vendorId && f.productId === d.productId);
+  const ds = { device: null, ax: 0, ay: 0, az: 0, primed: false };
+  function onDSReport(e) {
+    const d = e.data; let o;
+    if (e.reportId === 0x01 && d.byteLength >= 32) o = 0;      // USB
+    else if (e.reportId === 0x31 && d.byteLength >= 33) o = 1; // Bluetooth full report
+    else return;
+    // accelerometer: x right, y up, z toward the player
+    const ax = d.getInt16(o + 21, true), ay = d.getInt16(o + 23, true), az = d.getInt16(o + 25, true);
+    if (!ds.primed) { ds.ax = ax; ds.ay = ay; ds.az = az; ds.primed = true; }
+    const k = 0.25;
+    ds.ax += (ax - ds.ax) * k; ds.ay += (ay - ds.ay) * k; ds.az += (az - ds.az) * k;
+    if (!tilt.on) return;
+    const deg = 180 / Math.PI;
+    applyTilt(Math.atan2(-ds.az, ds.ay) * deg, Math.atan2(-ds.ax, ds.ay) * deg);
+  }
+  async function openDS(dev, quiet) {
+    try {
+      if (!dev.opened) await dev.open();
+      try { await dev.receiveFeatureReport(0x05); } catch {}   // switches Bluetooth to full reports with motion data
+      if (ds.device !== dev) dev.addEventListener('inputreport', onDSReport);
+      ds.device = dev; ds.primed = false;
+      tilt.needCalib = true;
+      if (!tilt.on) setTiltOn(true); else renderTiltUI();
+      renderOverlay();
+      if (!quiet) toast(t('dsReady'));
+    } catch { if (!quiet) toast(t('dsFail')); }
+  }
+  function dropDS() {
+    if (!ds.device) return;
+    ds.device.removeEventListener('inputreport', onDSReport);
+    ds.device = null; tilt.gotEvent = false; tilt.rawX = tilt.rawY = 0;
+    renderTiltUI(); renderOverlay(); toast(t('dsLost'));
+  }
+  if (hidOK) {
+    navigator.hid.addEventListener('connect', e => { if (!ds.device && isDS(e.device)) openDS(e.device, true); });
+    navigator.hid.addEventListener('disconnect', e => { if (e.device === ds.device) dropDS(); });
+    // reopen a controller allowed on an earlier visit, once the page has finished setting up
+    setTimeout(() => navigator.hid.getDevices().then(list => { const d = list.find(isDS); if (d && !ds.device) openDS(d, true); }).catch(() => {}), 0);
   }
 
   addEventListener('keydown', e => {
@@ -842,7 +934,7 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   function crash(reasonKey) {
     if (state !== 'playing') return;
     state = 'crashed'; shake = 0.6;
-    Music.crash(); Music.setPlaying(false); buzz([80, 40, 160]);
+    Music.crash(); Music.setPlaying(false); buzz([80, 40, 160]); rumble(400, 1, 0.7);
     const colors = [0xffb36b, 0xff7a59, 0xfff1c7, 0x5fe3ff];
     for (let i = 0; i < 46; i++) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), new THREE.MeshBasicMaterial({ color: pick(colors), transparent: true }));
@@ -945,7 +1037,7 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
       o.mesh.rotation.y += dt * 2.5;
       o.mesh.position.y = o.by + Math.sin(tm * 3 + o.mesh.position.z * 0.1) * 0.2;
       if (state === 'playing' && !o.got && o.mesh.position.distanceTo(carMesh.position) < 1.6) {
-        o.got = true; battery = Math.min(100, battery + 16); Music.pickup(); buzz(20); scene.remove(o.mesh);
+        o.got = true; battery = Math.min(100, battery + 16); Music.pickup(); buzz(20); rumble(80, 0, 0.5); scene.remove(o.mesh);
       }
     }
     for (const b of bits) {
@@ -994,35 +1086,43 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
       launchBtn.textContent = t('again');
     } else {
       oTitle.textContent = o.kind === 'ready' ? t('ready') : t('modeTitle', { m: t(mode) });
-      oText.textContent = t('text_' + mode) + (tilt.on ? ' ' + t('textTilt') : '');
+      const motion = !tilt.on ? '' : ds.device ? ' ' + t('textPad') : tiltSupported ? ' ' + t('textTilt') : '';
+      oText.textContent = t('text_' + mode) + motion;
       oScore.textContent = best > 0 ? t('bestLine', { b: best.toFixed(2) }) : '';
       launchBtn.textContent = t('launch');
     }
   }
   function renderTiltUI() {
-    $('tiltbox').hidden = !tiltSupported;
+    const source = !!ds.device || tiltSupported;   // something that gives motion data
+    $('tiltbox').hidden = !(tiltSupported || hidOK);
+    $('ds-btn').hidden = !hidOK;
+    $('ds-btn').setAttribute('aria-pressed', String(!!ds.device));
+    $('ds-state').textContent = ds.device ? t('dsOn') : t('dsConnect');
+    for (const id of ['tilt-toggle', 'tilt-cal', 'tilt-sens-chip', 'tilt-inv-chip', 'tilt-hint']) $(id).hidden = !source;
+    $('tilt-hint').textContent = ds.device ? t('dsHint') : t('tiltHint');
     $('tilt-toggle').setAttribute('aria-pressed', String(tilt.on));
     $('tilt-state').textContent = tilt.on ? t('on') : t('off');
     $('tilt-cal').disabled = !tilt.on;
     $('tilt-sens').value = tilt.sens;
     $('tilt-inv').checked = tilt.invert;
-    tiltDot.hidden = !tilt.on;
-    padEl.hidden = tilt.on;
+    tiltDot.hidden = !(tilt.on && source);
+    padEl.hidden = tilt.on && tiltSupported && !ds.device;
   }
+  const renderKeys = () => { $('keys').innerHTML = t('keys_' + mode) + t('keysPad'); };
   function applyLang() {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
     document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
     $('lang').textContent = t('langBtn');
     $('fs').setAttribute('aria-label', t('fullscreen'));
     $('modes').setAttribute('aria-label', t('easy') + ' / ' + t('medium') + ' / ' + t('hard'));
-    $('keys').innerHTML = t('keys_' + mode);
+    renderKeys();
     setSound(Music.enabled);
     buildPad(); renderTiltUI(); renderOverlay();
   }
   function setMode(m) {
     mode = m; store.set('volt.mode3d', m);
     document.querySelectorAll('#modes button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
-    $('keys').innerHTML = t('keys_' + m);
+    renderKeys();
     sources.clear(); buildPad();
     state = 'ready'; reset();
     Music.setMode(m); Music.setPlaying(false);
@@ -1048,6 +1148,11 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
     });
   }
   $('tilt-toggle').addEventListener('click', () => { setTiltOn(!tilt.on); if (tilt.on) { tilt.needCalib = true; enableTilt(); } renderOverlay(); });
+  $('ds-btn').addEventListener('click', e => {
+    e.currentTarget.blur();
+    if (ds.device) { toast(t('dsReady')); return; }
+    navigator.hid.requestDevice({ filters: DS_IDS }).then(list => { if (list[0]) openDS(list[0]); }).catch(() => toast(t('dsFail')));
+  });
   $('tilt-cal').addEventListener('click', () => { tilt.needCalib = true; toast(t('recentered')); });
   $('tilt-sens').addEventListener('input', e => { tilt.sens = parseFloat(e.target.value) || 1; store.set('volt.tiltSens', String(tilt.sens)); });
   $('tilt-inv').addEventListener('change', e => { tilt.invert = e.target.checked; store.set('volt.tiltInv', tilt.invert ? '1' : '0'); });
@@ -1074,7 +1179,7 @@ canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block
   let last = performance.now();
   function frame(now) {
     const dt = Math.min(0.033, (now - last) / 1000); last = now;
-    update(dt); renderer.render(scene, camera); hud(dt);
+    pollPad(); update(dt); renderer.render(scene, camera); hud(dt);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
